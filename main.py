@@ -1,12 +1,19 @@
-from dht import DHT11 as dht
-from machine import Pin
+from dht 		import DHT11 as dht
+from machine 	import Pin
+from microdot_asyncio import Microdot
 
-import time, utime, network, ntptime
+import time, utime, network, ntptime, urequests, gc
+
+import upip
+
+import uasyncio
 
 sensor      = dht(Pin(23, Pin.IN))
 
 relayOrange =     Pin(5,  Pin.OUT)
 relayPurple =     Pin(18, Pin.OUT)
+
+isConnected = False
 
 class Timer:
     def start(self):
@@ -37,9 +44,33 @@ def getMeasurements():
     sensor.measure()
     print('Temperature: {} | Humidity: {} | {}'.format(sensor.temperature(), sensor.humidity(), nowTime))
     
+def getPreciseMeasurements():
+    requestsParameters = {"temperature": 0, "humidity": 0}
+    temperatures = []
+    humidity     = []
+    for i in range(30):
+        time.sleep(2)
+        sensor.measure()
+        temperatures.append(sensor.temperature())
+        humidity.append(sensor.humidity())
+    
+    requestsParameters["temperature"] = sum(temperatures)/len(temperatures)
+    requestsParameters["humidity"] = sum(humidity)/len(humidity)
+    
+    print(requestsParameters)
+    return(requestsParameters)
+        
+    
 def controlRelays():
     relayOrange.value(sensor.temperature() >= 31)
     relayPurple.value(sensor.humidity() >= 70)
+    
+def writeThingSpeak(parm):
+    request = "https://api.thingspeak.com/update?api_key=R4YPOMPB7B6TTBTV&field1={}&field2={}".format(parm["temperature"], parm["humidity"])
+    print('{} | {}'.format(request, getTime(time.time(), 'brtz')))
+    response = urequests.get(request)
+    print(response.text)
+    response.close()
     
 wlan = network.WLAN(network.STA_IF)
 wlan.active(True)
@@ -61,15 +92,52 @@ while timer.check() < timeout:
         break
 
 print('is connected: {}'.format(wlan.isconnected()))
-
-print('configuring time...')
+    
+print('syncing time...')
 ntptime.host=('pool.ntp.org')
 ntptime.settime()
 time.sleep(5)
-print('time is configured. Now: {}'.format(getTime(time.time(), 'brtz')))
+print('time is synced. Now: {}'.format(getTime(time.time(), 'brtz')))
+    
+# the code below works fine, but I found out I wasn't supposed to host an API, but rather send data to one :(
+# app = Microdot()
+#     
+# @app.route('/')
+# async def default(request):
+#     return 'the service is running.'
+# 
+# @app.route('/getHumidity')
+# async def getHumidity(request):
+#     sensor.measure()
+#     return '{}'.format(sensor.humidity())
+# 
+# @app.route('/getTemperature')
+# async def getTemperature(request):
+#     sensor.measure()
+#     return '{}'.format(sensor.temperature())
+# 
+# @app.route('/getMeasures')
+# async def getMeasures(request):
+#     sensor.measure()
+#     return '{{"temperature": {}, "humidity" : {}}}'.format(sensor.temperature(), sensor.humidity())
+
+# print('Starting microdot app')
+# try:
+#     print(wlan.ifconfig()[0])
+#     app.run(port=80)
+#     print('success')
+# except Exception as e:
+#     app.shutdown()
+#     print(e)
 
 print('-- starting diagnosis --')
 while True:
-    time.sleep(5)
-    getMeasurements()
+    parm = getPreciseMeasurements()
     controlRelays()
+    writeThingSpeak(parm)
+    gc.collect()
+    
+    timestamp = time.time()
+    print('next log at {}'.format(getTime(timestamp + 1800, 'brtz')))
+    time.sleep(1740)
+

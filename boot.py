@@ -2,6 +2,7 @@
 import esp
 import webrepl
 import time
+import network
 
 print('-- init boot --')
 esp.osdebug(None)
