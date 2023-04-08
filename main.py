@@ -8,6 +8,10 @@ import upip
 
 import uasyncio
 
+# active low
+relay_ON  = 0
+relay_OFF = 1
+
 sensor      = dht(Pin(23, Pin.IN))
 
 relayOrange =     Pin(5,  Pin.OUT)
@@ -44,29 +48,31 @@ def getMeasurements():
     sensor.measure()
     print('Temperature: {} | Humidity: {} | {}'.format(sensor.temperature(), sensor.humidity(), nowTime))
     
-def getPreciseMeasurements():
+def getRequisition():
     requestsParameters = {"temperature": 0, "humidity": 0}
     temperatures = []
     humidity     = []
-    for i in range(30):
+    for i in range(10):
         time.sleep(2)
         sensor.measure()
         temperatures.append(sensor.temperature())
         humidity.append(sensor.humidity())
     
     requestsParameters["temperature"] = sum(temperatures)/len(temperatures)
-    requestsParameters["humidity"] = sum(humidity)/len(humidity)
+    requestsParameters["humidity"]    = sum(humidity)/len(humidity)
+
+    relayOrange.value(relay_ON if requestsParameters["temperature"] >= 31 else relay_OFF)
+    relayPurple.value(relay_ON if requestsParameters["humidity"]    >= 70 else relay_OFF)
+    
+    requestsParameters["relayOrange"] = relayOrange.value()
+    requestsParameters["relayPurple"] = relayPurple.value()
     
     print(requestsParameters)
     return(requestsParameters)
         
     
-def controlRelays():
-    relayOrange.value(sensor.temperature() >= 31)
-    relayPurple.value(sensor.humidity() >= 70)
-    
 def writeThingSpeak(parm):
-    request = "https://api.thingspeak.com/update?api_key=R4YPOMPB7B6TTBTV&field1={}&field2={}".format(parm["temperature"], parm["humidity"])
+    request = "https://api.thingspeak.com/update?api_key=R4YPOMPB7B6TTBTV&field1={}&field2={}&field3={}&field4={}".format(parm["temperature"], parm["humidity"], parm["relayOrange"], parm["relayPurple"])
     print('{} | {}'.format(request, getTime(time.time(), 'brtz')))
     response = urequests.get(request)
     print(response.text)
@@ -99,7 +105,7 @@ ntptime.settime()
 time.sleep(5)
 print('time is synced. Now: {}'.format(getTime(time.time(), 'brtz')))
     
-# the code below works fine, but I found out I wasn't supposed to host an API, but rather send data to one :(
+# the code below works fine, but I found out I wasn't supposed to host an API, but rather send data to one haha
 # app = Microdot()
 #     
 # @app.route('/')
@@ -131,13 +137,15 @@ print('time is synced. Now: {}'.format(getTime(time.time(), 'brtz')))
 #     print(e)
 
 print('-- starting diagnosis --')
+
+nextRequestTime  = time.time()
 while True:
-    parm = getPreciseMeasurements()
-    controlRelays()
-    writeThingSpeak(parm)
-    gc.collect()
-    
-    timestamp = time.time()
-    print('next log at {}'.format(getTime(timestamp + 1800, 'brtz')))
-    time.sleep(1740)
+    if time.time() >= nextRequestTime:
+        parm = getRequisition()
+        writeThingSpeak(parm)
+        gc.collect()
+        
+        nextRequestTime += 1800
+        print('next log at {}'.format(getTime(nextRequestTime, 'brtz')))
+    time.sleep(15)
 
