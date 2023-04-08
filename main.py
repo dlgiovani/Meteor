@@ -12,6 +12,12 @@ import uasyncio
 relay_ON  = 0
 relay_OFF = 1
 
+measurementsCycles = 30
+secondsToDelay     = 2
+
+lastRequest = time.time() - 30 # initializes first request to be timeout valid
+delayBetweenMeasures = 1800 # seconds
+
 sensor      = dht(Pin(23, Pin.IN))
 
 relayOrange =     Pin(5,  Pin.OUT)
@@ -40,20 +46,17 @@ def getTime(timestamp, timezone):
         return brtz
     else:
         return '{} - available timezones: utc, brtz'
-
-def getMeasurements():
-    timestamp = time.time()
-    nowTime   = getTime(timestamp, 'brtz')
-    
-    sensor.measure()
-    print('Temperature: {} | Humidity: {} | {}'.format(sensor.temperature(), sensor.humidity(), nowTime))
     
 def getRequisition():
-    requestsParameters = {"temperature": 0, "humidity": 0}
+    parm = "measuring..."
+    request = getStatusRequest(parm)
+    sendRequest(request)
+    
+    requestsParameters = {}
     temperatures = []
     humidity     = []
-    for i in range(10):
-        time.sleep(2)
+    for i in range(measurementsCycles):
+        time.sleep(secondsToDelay)
         sensor.measure()
         temperatures.append(sensor.temperature())
         humidity.append(sensor.humidity())
@@ -71,11 +74,28 @@ def getRequisition():
     return(requestsParameters)
         
     
-def writeThingSpeak(parm):
+def getDataRequest(parm):
     request = "https://api.thingspeak.com/update?api_key=R4YPOMPB7B6TTBTV&field1={}&field2={}&field3={}&field4={}".format(parm["temperature"], parm["humidity"], parm["relayOrange"], parm["relayPurple"])
-    print('{} | {}'.format(request, getTime(time.time(), 'brtz')))
+    return request
+
+def getStatusRequest(parm):
+    print(f'setting status of "{parm}"')
+    request = "https://api.thingspeak.com/update?api_key=R4YPOMPB7B6TTBTV&status={}".format(parm.replace(' ', '%20'))
+    return request
+
+def sendRequest(request):
+    global lastRequest
+    if time.time() <= lastRequest + 30:
+        print('waiting for API timeout...')
+        while time.time() <= lastRequest + 30:
+            pass
+    print('sending: {}'.format(request))
     response = urequests.get(request)
-    print(response.text)
+    lastRequest = time.time()
+    print('response status: {}'.format(response.status_code))
+    print('response text: {}'.format(response.text))
+    if response.text == '0':
+        print('request failed as timeout rule wasn\'t respected.')
     response.close()
     
 wlan = network.WLAN(network.STA_IF)
@@ -104,8 +124,29 @@ ntptime.host=('pool.ntp.org')
 ntptime.settime()
 time.sleep(5)
 print('time is synced. Now: {}'.format(getTime(time.time(), 'brtz')))
-    
-# the code below works fine, but I found out I wasn't supposed to host an API, but rather send data to one haha
+
+print('-- starting diagnosis --')
+
+nextRequestTime  = time.time()
+while True:
+    if time.time() >= nextRequestTime - measurementsCycles * secondsToDelay:
+        parm    = getRequisition()
+        request = getDataRequest(parm)
+        sendRequest(request)
+        gc.collect()
+        print('-')
+        nextRequestTime += delayBetweenMeasures
+        nextLogStatus    = 'next log at {}'.format(getTime(nextRequestTime, 'brtz'))
+        request = getStatusRequest(nextLogStatus)
+        sendRequest(request)
+        print('--')
+
+
+
+#-----
+# the code below works fine, but I found out I wasn't supposed to host an API, but rather send data to one T-T
+# kept for sentimental reasons
+#
 # app = Microdot()
 #     
 # @app.route('/')
@@ -135,17 +176,3 @@ print('time is synced. Now: {}'.format(getTime(time.time(), 'brtz')))
 # except Exception as e:
 #     app.shutdown()
 #     print(e)
-
-print('-- starting diagnosis --')
-
-nextRequestTime  = time.time()
-while True:
-    if time.time() >= nextRequestTime:
-        parm = getRequisition()
-        writeThingSpeak(parm)
-        gc.collect()
-        
-        nextRequestTime += 1800
-        print('next log at {}'.format(getTime(nextRequestTime, 'brtz')))
-    time.sleep(15)
-
