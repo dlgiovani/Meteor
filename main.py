@@ -1,29 +1,8 @@
-from dht 		import DHT11 as dht
-from machine 	import Pin
+from dht 		      import DHT11 as dht
+from machine 	      import Pin
 from microdot_asyncio import Microdot
 
-import time, utime, network, ntptime, urequests, gc
-
-import upip
-
-import uasyncio
-
-# active low
-relay_ON  = 0
-relay_OFF = 1
-
-measurementsCycles = 30
-secondsToDelay     = 2
-
-lastRequest = time.time() - 30 # initializes first request to be timeout valid
-delayBetweenMeasures = 1800 # seconds
-
-sensor      = dht(Pin(23, Pin.IN))
-
-relayOrange =     Pin(5,  Pin.OUT)
-relayPurple =     Pin(18, Pin.OUT)
-
-isConnected = False
+import time, utime, network, ntptime, urequests, gc, upip, uasyncio
 
 class Timer:
     def start(self):
@@ -84,7 +63,10 @@ def getStatusRequest(parm):
     return request
 
 def sendRequest(request):
+    global wlan
     global lastRequest
+    while not wlan.isconnected():
+        setupConnection()
     if time.time() <= lastRequest + 30:
         print('waiting for API timeout...')
         while time.time() <= lastRequest + 30:
@@ -98,48 +80,90 @@ def sendRequest(request):
         print('request failed as timeout rule wasn\'t respected.')
     response.close()
     
-wlan = network.WLAN(network.STA_IF)
-wlan.active(True)
+def setupConnection():
+    global wlan
+    print('setting up connection...')
+    wlan.scan()
 
-print('setting up...')
-print('setting up connection...')
-wlan.scan()
+    wlan.connect('homeLink', '%mamoreBa7bole%')
 
-wlan.connect('homeLink', '%mamoreBa7bole%')
+    timer = Timer()
+    timeout = 60
+    print('awaiting connection. Timeout: {} seconds'.format(timeout))
 
-timer = Timer()
-timeout = 60
-print('awaiting connection. Timeout: {} seconds'.format(timeout))
+    timer.start()
+    while timer.check() < timeout:
+        if wlan.isconnected():
+            print('connected successfully. ({} seconds)'.format(timer.check()))
+            break
 
-timer.start()
-while timer.check() < timeout:
-    if wlan.isconnected():
-        print('connected successfully. ({} seconds)'.format(timer.check()))
-        break
-
-print('is connected: {}'.format(wlan.isconnected()))
+    print('is connected: {}'.format(wlan.isconnected()))
+    if not wlan.isconnected():
+        setupConnection()
     
-print('syncing time...')
-ntptime.host=('pool.ntp.org')
-ntptime.settime()
-time.sleep(5)
-print('time is synced. Now: {}'.format(getTime(time.time(), 'brtz')))
-
-print('-- starting diagnosis --')
-
-nextRequestTime  = time.time()
-while True:
+def main():
+    global nextRequestTime
     if time.time() >= nextRequestTime - measurementsCycles * secondsToDelay:
         parm    = getRequisition()
         request = getDataRequest(parm)
         sendRequest(request)
-        gc.collect()
+        try:
+            gc.collect()
+        except Exception as e:
+            print(e)
+            
         print('-')
         nextRequestTime += delayBetweenMeasures
         nextLogStatus    = 'next log at {}'.format(getTime(nextRequestTime, 'brtz'))
         request = getStatusRequest(nextLogStatus)
         sendRequest(request)
         print('--')
+        return(nextRequestTime)
+    else:
+        time.sleep(nextRequestTime - time.time())
+        
+def syncTime():
+    print('syncing time...')
+    ntptime.host=('pool.ntp.org')
+    ntptime.settime()
+    time.sleep(5)
+    print('time is synced. Now: {}'.format(getTime(time.time(), 'brtz')))
+
+
+# active low
+relay_ON  = 0
+relay_OFF = 1
+
+measurementsCycles = 30
+secondsToDelay     = 2
+
+lastRequest = time.time() - 30 # initializes first request to be timeout valid
+delayBetweenMeasures = 1800 # seconds
+
+sensor = dht(Pin(23, Pin.IN))
+
+relayOrange =     Pin(5,  Pin.OUT)
+relayPurple =     Pin(18, Pin.OUT)
+
+wlan = network.WLAN(network.STA_IF)
+wlan.active(True)
+
+print('setting up...')
+setupConnection()
+syncTime()
+
+print('-- starting diagnosis --')
+
+nextRequestTime  = time.time()
+while True:
+    try:
+        main()
+    except Exception as e:
+        if wlan.isconnected():
+            print('error: {}'.format(e))
+            exit()
+        else:
+            setupConnection()
 
 
 
